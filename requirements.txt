@@ -1,7 +1,6 @@
 streamlit
 sqlite3
 folium
-streamlit_folium
 requests
 zipfile
 io
