@@ -11,7 +11,10 @@ from datetime import datetime
 # ======================================
 # CRIAÇÃO DO DIRETÓRIO DE LOGS
 # ======================================
-os.makedirs("logs", exist_ok=True)
+try:
+    os.makedirs("logs", exist_ok=True)
+except Exception as e:
+    st.error(f"Erro ao criar diretório de logs: {e}")
 
 # ======================================
 # CONFIGURAÇÃO INICIAL
