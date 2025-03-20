@@ -11,15 +11,18 @@ from datetime import datetime
 # ======================================
 # CONFIGURAÇÃO INICIAL
 # ======================================
-os.makedirs("database", exist_ok=True)
-os.makedirs("logs", exist_ok=True)
+# Criar diretórios temporários para logs (dentro de /tmp)
+os.makedirs("/tmp/database", exist_ok=True)
+os.makedirs("/tmp/logs", exist_ok=True)
 
+# Configuração do logging para o arquivo de logs no Streamlit Cloud
 logging.basicConfig(
-    filename='logs/streamlit_app.log',
+    filename='/tmp/logs/streamlit_app.log',  # Usar o diretório /tmp
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8'
 )
+
 
 # ======================================
 # FUNÇÕES DO BANCO DE DADOS (COM HISTÓRICO)
