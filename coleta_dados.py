@@ -8,7 +8,7 @@ from datetime import datetime
 
 # Configuração de logs
 logging.basicConfig(
-    filename='logs/coleta_dados.log',
+    filename='/tmp/logs/coleta_dados.log',  # Usar o diretório /tmp
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8'
