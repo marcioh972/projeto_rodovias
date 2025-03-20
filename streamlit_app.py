@@ -13,7 +13,6 @@ from datetime import datetime
 # ======================================
 # Criar diretórios temporários para logs (dentro de /tmp)
 os.makedirs("/tmp/database", exist_ok=True)
-os.makedirs("/tmp/logs", exist_ok=True)
 
 # Configuração do logging para o arquivo de logs no Streamlit Cloud
 logging.basicConfig(
