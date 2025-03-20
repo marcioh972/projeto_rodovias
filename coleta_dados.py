@@ -7,7 +7,10 @@ import logging
 from datetime import datetime
 
 # Criação do diretório de logs, se não existir
-os.makedirs("logs", exist_ok=True)
+try:
+    os.makedirs("logs", exist_ok=True)
+except Exception as e:
+    print(f"Erro ao criar diretório de logs: {e}")
 
 # Configuração de logs
 logging.basicConfig(
