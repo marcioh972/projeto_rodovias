@@ -1,240 +1,145 @@
-import streamlit as st
-import pandas as pd
-import sqlite3
+import requests
+import zipfile
+import io
 import os
+import pandas as pd
 import logging
-import folium
-from streamlit_folium import folium_static
-from coleta_dados import baixar_dados_dnit
 from datetime import datetime
 
-# ======================================
-# CRIAÇÃO DO DIRETÓRIO DE LOGS
-# ======================================
+# Criação do diretório de logs, se não existir
 os.makedirs("logs", exist_ok=True)
 
-# ======================================
-# CONFIGURAÇÃO INICIAL
-# ======================================
+# Configuração de logs
 logging.basicConfig(
-    filename='logs/streamlit_app.log',
+    filename='logs/coleta_dados.log',
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8'
 )
 
-# ======================================
-# FUNÇÕES DO BANCO DE DADOS (COM HISTÓRICO)
-# ======================================
-def gerenciar_banco(df=None, ano=None, br=None, clear=False):
-    """Gerencia todas as operações do banco de dados com tratamento de erros"""
-    try:
-        conn = sqlite3.connect("database/rodovias.db")
-        cursor = conn.cursor()
-
-        # Criar tabela principal
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS dados_dnit (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ano INTEGER NOT NULL,
-                br INTEGER NOT NULL,
-                dados TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(ano, br)
-            )
-        ''')
-
-        # Criar tabela de histórico
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS historico (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                consulta TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        if clear:
-            cursor.execute("DELETE FROM dados_dnit")
-            cursor.execute("DELETE FROM historico")
-            conn.commit()
-            return
-
-        if df is not None:
-            # Inserir dados principais
-            df_json = df.to_json(orient='records')
-            cursor.execute('''
-                INSERT OR REPLACE INTO dados_dnit (ano, br, dados)
-                VALUES (?, ?, ?)
-            ''', (ano, br, df_json))
-
-            # Registrar no histórico
-            cursor.execute('''
-                INSERT INTO historico (consulta)
-                VALUES (?)
-            ''', (f"BR-{br} ({ano})",))
-
-            conn.commit()
-
-        return conn
-
-    except sqlite3.Error as e:
-        logging.error(f"Erro SQLite: {str(e)}")
-        raise RuntimeError("Erro no banco de dados")
-    finally:
-        if 'conn' in locals():
-            conn.close()
-
-# ======================================
-# CACHE E CARREGAMENTO DE DADOS
-# ======================================
-@st.cache_data(ttl=3600, show_spinner="Carregando dados em cache...")
-def carregar_dados(_df):
-    """Processamento adicional de dados com cache"""
-    try:
-        # Converter coordenadas (exemplo hipotético)
-        if 'latitude' in _df.columns and 'longitude' in _df.columns:
-            _df['latitude'] = pd.to_numeric(_df['latitude'], errors='coerce')
-            _df['longitude'] = pd.to_numeric(_df['longitude'], errors='coerce')
-        return _df.dropna(subset=['latitude', 'longitude'], how='all')
-    except Exception as e:
-        logging.error(f"Erro no processamento: {str(e)}")
-        return _df
-
-# ======================================
-# COMPONENTES DA INTERFACE
-# ======================================
-def exibir_historico():
-    """Mostra o histórico de consultas na sidebar"""
-    try:
-        conn = sqlite3.connect("database/rodovias.db")
-        historico = pd.read_sql("SELECT * FROM historico ORDER BY timestamp DESC LIMIT 10", conn)
-        
-        st.sidebar.subheader("📚 Histórico de Consultas")
-        if not historico.empty:
-            for _, row in historico.iterrows():
-                st.sidebar.write(f"🗓️ {row['timestamp']} - {row['consulta']}")
-        else:
-            st.sidebar.write("Nenhuma consulta recente")
-            
-    except sqlite3.Error as e:
-        st.sidebar.error("Erro ao carregar histórico")
-
-def criar_mapa(df):
-    """Gera mapa interativo com Folium"""
-    try:
-        if df.empty:
-            raise ValueError("DataFrame vazio")
-            
-        m = folium.Map(location=[-15.788497, -47.879873], zoom_start=4)
-        
-        # Adicionar marcadores
-        for idx, row in df.iterrows():
-            if pd.notnull(row['latitude']) and pd.notnull(row['longitude']):
-                folium.Marker(
-                    location=[row['latitude'], row['longitude']],
-                    popup=f"BR-{row['br']} | {row['uf']}",
-                    icon=folium.Icon(color='blue', icon='road')
-                ).add_to(m)
-        
-        return m
-        
-    except KeyError:
-        logging.warning("Dados geográficos ausentes")
-        return None
-    except Exception as e:
-        logging.error(f"Erro no mapa: {str(e)}")
-        return None
-
-# ======================================
-# INTERFACE PRINCIPAL
-# ======================================
-st.title("🚦 Painel PNCT - DNIT")
-st.markdown("### Dados Rodoviários Integrados")
-
-# Controles principais
-with st.form(key="main_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        ano = st.number_input("Ano", min_value=2000, max_value=datetime.now().year, value=2023)
-    with col2:
-        br = st.number_input("Número da BR", min_value=1, max_value=999, value=101)
+def baixar_dados_dnit(ano, br, caminho_base="data/raw"):
+    """Baixa e organiza dados do DNIT com tratamento completo de erros."""
     
-    submitted = st.form_submit_button("Buscar Dados")
-
-# Seção de histórico
-exibir_historico()
-
-# Processamento principal
-if submitted:
     try:
-        with st.spinner("🚀 Buscando dados. Aguarde..."):
-            # Baixar e processar dados
-            df_raw = baixar_dados_dnit(ano, br)
-            df_processed = carregar_dados(df_raw)
+        # Validação rigorosa das entradas
+        if not isinstance(ano, int) or len(str(ano)) != 4 or ano < 2000 or ano > datetime.now().year:
+            raise ValueError(f"Ano inválido: {ano}. Deve ser entre 2000 e {datetime.now().year}.")
+        
+        if not isinstance(br, int) or br <= 0 or br > 999:
+            raise ValueError(f"BR inválida: {br}. Deve ser um número entre 1 e 999.")
+
+        # Criação de diretórios com tratamento de erros
+        caminho_br = os.path.join(caminho_base, str(ano), f"BR-{br}")
+        caminho_zip = os.path.join(caminho_br, "arquivos_zip")
+        caminho_csv = os.path.join(caminho_br, "arquivos_csv")
+        
+        try:
+            os.makedirs(caminho_zip, exist_ok=True)
+            os.makedirs(caminho_csv, exist_ok=True)
+        except PermissionError as e:
+            logging.critical(f"Permissão negada para criar diretórios: {e}")
+            raise RuntimeError("Erro de permissão: verifique acesso às pastas.")
+        except OSError as e:
+            logging.critical(f"Erro ao criar diretórios: {e}")
+            raise RuntimeError("Erro crítico no sistema de arquivos.")
+
+        # Construção da URL
+        url = f"https://servicos.dnit.gov.br/dadospnct/arquivos/pnct_{ano}_{br}.zip"
+        nome_zip = f"pnct_{ano}_{br}.zip"
+        caminho_zip_completo = os.path.join(caminho_zip, nome_zip)
+
+        # Download com timeout e verificação de status
+        try:
+            response = requests.get(url, timeout=30)
+            response.raise_for_status()
             
-            # Salvar no banco
-            gerenciar_banco(df=df_processed, ano=ano, br=br)
+            if 'application/zip' not in response.headers.get('Content-Type', ''):
+                raise ValueError("O conteúdo baixado não é um arquivo ZIP válido.")
+
+        except requests.exceptions.HTTPError as e:
+            if response.status_code == 404:
+                logging.error(f"Arquivo não encontrado: {url}")
+                raise FileNotFoundError(f"Dados para BR-{br} ({ano}) não encontrados no servidor.")
+            else:
+                logging.error(f"Erro HTTP {response.status_code}: {e}")
+                raise
+        except requests.exceptions.Timeout:
+            logging.error("Timeout ao acessar o servidor.")
+            raise RuntimeError("Conexão com o servidor demorou muito.")
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Erro de conexão: {e}")
+            raise RuntimeError("Falha na conexão com a internet.")
+
+        # Salvamento do ZIP
+        try:
+            with open(caminho_zip_completo, 'wb') as f:
+                f.write(response.content)
+            logging.info(f"ZIP salvo em: {caminho_zip_completo}")
+        except IOError as e:
+            logging.error(f"Erro ao salvar ZIP: {e}")
+            raise RuntimeError("Erro ao salvar arquivo no computador.")
+
+        # Processamento do ZIP
+        try:
+            with zipfile.ZipFile(io.BytesIO(response.content)) as zip_ref:
+                if not zip_ref.namelist():
+                    raise zipfile.BadZipFile("Arquivo ZIP vazio ou corrompido.")
+                
+                csv_files = [f for f in zip_ref.namelist() if f.endswith('.csv')]
+                if not csv_files:
+                    raise ValueError("Nenhum CSV encontrado no ZIP.")
+                
+                csv_no_zip = csv_files[0]
+                zip_ref.extract(csv_no_zip, caminho_csv)
+                caminho_csv_final = os.path.join(caminho_csv, csv_no_zip)
+
+        except zipfile.BadZipFile as e:
+            logging.error(f"ZIP corrompido: {e}")
+            raise RuntimeError("Arquivo baixado está corrompido.")
+        except (ValueError, IndexError) as e:
+            logging.error(f"Erro no conteúdo do ZIP: {e}")
+            raise RuntimeError("Formato inesperado do arquivo ZIP.")
+
+        # Leitura do CSV
+        try:
+            df = pd.read_csv(caminho_csv_final, sep=';', encoding='latin1', on_bad_lines='warn')
+            if df.empty:
+                logging.warning("CSV vazio ou sem dados válidos.")
+            return df
+        
+        except pd.errors.ParserError as e:
+            logging.error(f"Erro ao ler CSV: {e}")
+            raise RuntimeError("Formato inválido do arquivo CSV.")
+        except UnicodeDecodeError as e:
+            logging.error(f"Erro de codificação: {e}")
+            raise RuntimeError("Problema com caracteres especiais no arquivo.")
+        
+    except Exception as e:
+        logging.exception("Erro não tratado durante a execução:")
+        raise
+
+# Interface interativa com tratamento de erros
+if __name__ == "__main__":
+    print("=== Coletor de Dados DNIT ===")
+    try:
+        ano = int(input("Digite o ano (ex: 2023): "))
+        br = int(input("Digite o número da BR (ex: 101): "))
+        
+        df = baixar_dados_dnit(ano, br)
+        
+        if df is not None:
+            print("\n✅ Download concluído!")
+            print(f"📁 Dados salvos em: data/raw/{ano}/BR-{br}")
+            print("\n📊 Visualização dos dados:")
+            print(df.head())
             
-        st.success(f"✅ {len(df_processed)} registros carregados com sucesso!")
-        
-        # Visualização de dados
-        st.header("📊 Visualização dos Dados")
-        st.dataframe(df_processed.head(10), use_container_width=True)
-        
-        # Filtros dinâmicos
-        st.sidebar.header("⚙️ Filtros Avançados")
-        ufs_disponiveis = df_processed['uf'].unique()
-        ufs_selecionadas = st.sidebar.multiselect(
-            "Estados (UF)",
-            options=ufs_disponiveis,
-            default=ufs_disponiveis[:2]
-        )
-        
-        df_filtrado = df_processed[df_processed['uf'].isin(ufs_selecionadas)]
-        
-        # Mapa interativo
-        st.header("🗺️ Mapa Georreferenciado")
-        mapa = criar_mapa(df_filtrado)
-        if mapa:
-            folium_static(mapa, width=1200)
-        else:
-            st.warning("Dados geográficos não disponíveis para visualização")
-            
-        # Gráficos
-        st.header("📈 Análise Estatística")
-        fig = px.histogram(df_filtrado, x='uf', title="Distribuição por UF")
-        st.plotly_chart(fig, use_container_width=True)
-        
-        # Download
-        st.header("📥 Exportação de Dados")
-        csv = df_filtrado.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="Baixar CSV Filtrado",
-            data=csv,
-            file_name=f"dados_br{br}_{ano}.csv",
-            mime="text/csv"
-        )
-        
+    except ValueError as e:
+        print(f"\n❌ Erro de entrada: {e}")
     except FileNotFoundError as e:
-        st.error(f"🚫 Dados não encontrados: {str(e)}")
-        st.markdown("""
-            Verifique:
-            1. A BR selecionada existe
-            2. O ano possui dados disponíveis
-            3. Conexão com internet ativa
-        """)
+        print(f"\n❌ {e} Verifique no site: https://servicos.dnit.gov.br/dadospnct/mapa")
     except RuntimeError as e:
-        st.error(f"⚠️ Erro crítico: {str(e)}")
+        print(f"\n❌ Erro durante a execução: {e}")
     except Exception as e:
-        st.error("❌ Erro inesperado. Consulte os logs técnicos.")
-        logging.exception("Erro não tratado:")
-
-# Controles administrativos
-st.sidebar.header("⚙️ Administração")
-if st.sidebar.button("🔄 Limpar Cache e Histórico"):
-    try:
-        gerenciar_banco(clear=True)
-        st.cache_data.clear()
-        st.sidebar.success("Cache e histórico resetados")
-    except Exception as e:
-        st.sidebar.error("Erro na limpeza: " + str(e))
+        print(f"\n⚠️ Erro inesperado: {e} Consulte o arquivo de logs.")
+    finally:
+        print("\nOperação finalizada.")
