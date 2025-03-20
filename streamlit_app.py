@@ -9,22 +9,19 @@ from coleta_dados import baixar_dados_dnit
 from datetime import datetime
 
 # ======================================
-# CONFIGURAÇÃO INICIAL
+# CRIAÇÃO DO DIRETÓRIO DE LOGS
 # ======================================
-
-# Criação do diretório de logs, se não existir
 os.makedirs("logs", exist_ok=True)
 
-# Caminho absoluto para o arquivo de log
-log_file_path = os.path.join(os.getcwd(), 'logs/coleta_dados.log')
-
+# ======================================
+# CONFIGURAÇÃO INICIAL
+# ======================================
 logging.basicConfig(
-    filename=log_file_path,
+    filename='logs/streamlit_app.log',
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     encoding='utf-8'
 )
-
 
 # ======================================
 # FUNÇÕES DO BANCO DE DADOS (COM HISTÓRICO)
