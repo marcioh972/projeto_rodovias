@@ -1,9 +1,5 @@
 streamlit
-sqlite3
 folium
 requests
-zipfile
-io
-os
-pandas 
-logging
+pandas
+streamlit_folium
