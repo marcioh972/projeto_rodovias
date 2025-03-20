@@ -11,8 +11,6 @@ from datetime import datetime
 # ======================================
 # CONFIGURAÇÃO INICIAL
 # ======================================
-import os
-import logging
 
 # Criação do diretório de logs, se não existir
 os.makedirs("logs", exist_ok=True)
