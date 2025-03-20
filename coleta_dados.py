@@ -6,9 +6,6 @@ import pandas as pd
 import logging
 from datetime import datetime
 
-# Criação do diretório de logs, se não existir
-os.makedirs("logs", exist_ok=True)
-
 # Configuração de logs
 logging.basicConfig(
     filename='logs/coleta_dados.log',
